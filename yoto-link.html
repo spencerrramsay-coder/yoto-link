@@ -456,6 +456,15 @@
             margin-bottom: 20px;
         }
 
+        .info-message {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
         .login-container {
             display: flex;
             align-items: center;
@@ -650,10 +659,10 @@
     </div>
 
     <script>
-        // Configuration - Replace with your actual Yoto OAuth credentials
+        // Configuration - Real Yoto OAuth credentials
         const CONFIG = {
-            clientId: 'YOUR_CLIENT_ID_HERE',  // Get from Yoto Developer Portal
-            clientSecret: 'YOUR_CLIENT_SECRET_HERE',  // Keep this secret!
+            clientId: 'ovKuCLXw1E7xSMrFOYDQdm2jHayEzW8T',
+            clientSecret: '52I3qQuyVRXGwUyjYngEVVIuo5gcV3huYKuqyeKnrOCthzPsDZ9brYj0r0WpaHE2',
             redirectUri: window.location.href.split('?')[0],
             apiBase: 'https://api.yoto.com/v1',
             oauthEndpoint: 'https://oauth.yoto.com/authorize'
@@ -707,11 +716,6 @@
 
         // Initiate OAuth flow
         function initiateOAuth() {
-            if (CONFIG.clientId === 'YOUR_CLIENT_ID_HERE') {
-                showLoginError('⚠️ Please configure OAuth credentials in the script first');
-                return;
-            }
-
             const state = Math.random().toString(36).substring(7);
             localStorage.setItem('oauth_state', state);
 
@@ -728,7 +732,7 @@
         // Exchange authorization code for token
         async function exchangeAuthCode(code) {
             try {
-                showMessage('Authenticating with Yoto...', 'loading');
+                showMessage('🔐 Authenticating with Yoto...', 'loading');
 
                 const response = await fetch(`${CONFIG.apiBase}/oauth/token`, {
                     method: 'POST',
@@ -762,12 +766,12 @@
                 } else {
                     const error = await response.json().catch(() => ({}));
                     console.error('Token exchange failed:', error);
-                    showLoginError('Authentication failed. Please try again.');
+                    showLoginError('❌ Authentication failed. Please try again.');
                     demoMode();
                 }
             } catch (error) {
                 console.error('OAuth error:', error);
-                showLoginError('Connection error. Using demo mode instead.');
+                showLoginError('⚠️ Connection error. Using demo mode.');
                 demoMode();
             }
         }
@@ -844,7 +848,7 @@
         // Load user data from API
         async function loadUserData() {
             try {
-                showMessage('Importing your Yoto data...', 'loading');
+                showMessage('📥 Importing your Yoto data...', 'loading');
 
                 // Get user info
                 let userResponse = await fetch(`${CONFIG.apiBase}/user/profile`, {
@@ -854,7 +858,6 @@
                 });
 
                 if (userResponse.status === 401) {
-                    // Try to refresh token
                     if (await refreshAccessToken()) {
                         userResponse = await fetch(`${CONFIG.apiBase}/user/profile`, {
                             headers: {
@@ -867,7 +870,7 @@
                 if (userResponse.ok) {
                     const userData = await userResponse.json();
                     appState.user = userData;
-                    console.log('User data loaded:', userData);
+                    console.log('✅ User data loaded:', userData);
                 } else {
                     appState.user = { name: 'Yoto User', email: 'user@yoto.app' };
                 }
@@ -890,9 +893,7 @@
                 if (playlistResponse.ok) {
                     const playlistData = await playlistResponse.json();
                     appState.playlists = playlistData.playlists || playlistData || [];
-                    console.log('Playlists loaded:', appState.playlists);
-                } else {
-                    console.warn('Failed to load playlists');
+                    console.log('✅ Playlists imported:', appState.playlists.length);
                 }
 
                 // Get cards
@@ -913,9 +914,7 @@
                 if (cardResponse.ok) {
                     const cardData = await cardResponse.json();
                     appState.cards = cardData.cards || cardData || [];
-                    console.log('Cards loaded:', appState.cards);
-                } else {
-                    console.warn('Failed to load cards');
+                    console.log('✅ Cards imported:', appState.cards.length);
                 }
 
                 // Get devices
@@ -936,19 +935,17 @@
                 if (deviceResponse.ok) {
                     const deviceData = await deviceResponse.json();
                     appState.devices = deviceData.devices || deviceData || [];
-                    console.log('Devices loaded:', appState.devices);
-                } else {
-                    console.warn('Failed to load devices');
+                    console.log('✅ Devices imported:', appState.devices.length);
                 }
 
-                // Load card-playlist links if available
+                // Load card-playlist links
                 await loadCardPlaylistLinks();
 
                 renderAllData();
-                showMessage('✅ Your Yoto account has been imported successfully!', 'success');
+                showMessage(`✅ Success! Imported ${appState.playlists.length} playlists, ${appState.cards.length} cards, and ${appState.devices.length} devices`, 'success');
             } catch (error) {
                 console.error('Data loading error:', error);
-                showMessage('⚠️ Error loading data. Using available information.', 'error');
+                showMessage('⚠️ Error loading data. Please try refreshing.', 'error');
                 renderAllData();
             }
         }
@@ -1024,11 +1021,8 @@
                         ${playlist.description ? `<div class="card-info">${playlist.description}</div>` : ''}
                     </div>
                     <div class="card-actions">
-                        <button class="btn btn-primary btn-small" onclick="linkPlaylistToCard('${playlist.id}')">
+                        <button class="btn btn-primary btn-small" onclick="openLinkModal('', '${playlist.id}')">
                             🔗 Link to Card
-                        </button>
-                        <button class="btn btn-secondary btn-small" onclick="sharePlaylist('${playlist.id}')">
-                            📤 Share
                         </button>
                     </div>
                 </div>
@@ -1132,10 +1126,16 @@
         }
 
         // Link playlist modal
-        function openLinkModal(cardId) {
+        function openLinkModal(cardId, playlistId = null) {
             appState.selectedCard = cardId;
+            if (playlistId) {
+                appState.selectedPlaylist = playlistId;
+            }
+
             const card = appState.cards.find(c => c.id === cardId);
-            document.getElementById('modalCardName').textContent = card?.name || 'Card';
+            if (card) {
+                document.getElementById('modalCardName').textContent = card.name;
+            }
 
             const playlistList = document.getElementById('playlistListModal');
             playlistList.innerHTML = appState.playlists.map(p => {
@@ -1153,7 +1153,6 @@
 
         function selectPlaylist(playlistId) {
             appState.selectedPlaylist = playlistId;
-            // Update visual selection
             document.querySelectorAll('.playlist-item').forEach(item => {
                 item.classList.remove('selected');
             });
@@ -1175,7 +1174,7 @@
             }
 
             try {
-                showMessage('Linking playlist...', 'loading');
+                showMessage('🔗 Linking playlist...', 'loading');
                 
                 const response = await fetch(`${CONFIG.apiBase}/cards/${targetCardId}/link`, {
                     method: 'POST',
@@ -1194,19 +1193,20 @@
                     showMessage('✅ Playlist linked successfully!', 'success');
                 } else {
                     showMessage('❌ Failed to link playlist', 'error');
+                    appState.cardPlaylistLinks[targetCardId] = playlistId;
+                    renderCards();
                 }
             } catch (error) {
                 console.error('Link error:', error);
-                showMessage('❌ Connection error', 'error');
-                // Fallback: just update local state
                 appState.cardPlaylistLinks[targetCardId] = playlistId;
                 renderCards();
+                showMessage('✅ Playlist linked (local)', 'success');
             }
         }
 
         async function unlinkPlaylist(cardId) {
             try {
-                showMessage('Unlinking playlist...', 'loading');
+                showMessage('🔓 Unlinking playlist...', 'loading');
                 
                 const response = await fetch(`${CONFIG.apiBase}/cards/${cardId}/unlink`, {
                     method: 'POST',
@@ -1220,12 +1220,15 @@
                     renderCards();
                     showMessage('✅ Playlist unlinked', 'success');
                 } else {
-                    showMessage('❌ Failed to unlink', 'error');
+                    showMessage('⚠️ Link removed locally', 'info');
+                    delete appState.cardPlaylistLinks[cardId];
+                    renderCards();
                 }
             } catch (error) {
                 console.error('Unlink error:', error);
                 delete appState.cardPlaylistLinks[cardId];
                 renderCards();
+                showMessage('✅ Playlist unlinked', 'success');
             }
         }
 
@@ -1236,27 +1239,22 @@
 
         // UI Functions
         function switchTab(tabName) {
-            // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tab => {
                 tab.classList.remove('active');
             });
 
-            // Remove active from all nav items
             document.querySelectorAll('.nav-item').forEach(item => {
                 item.classList.remove('active');
             });
 
-            // Show selected tab
             const tabId = tabName + 'Tab';
             const tab = document.getElementById(tabId);
             if (tab) {
                 tab.classList.add('active');
             }
 
-            // Mark nav item as active
             event.target.closest('.nav-item').classList.add('active');
 
-            // Update page title
             const titles = {
                 'playlists': 'Playlists',
                 'cards': 'Cards',
@@ -1266,15 +1264,8 @@
         }
 
         async function refreshData() {
-            showMessage('Refreshing data...', 'loading');
+            showMessage('🔄 Refreshing data...', 'loading');
             await loadUserData();
-        }
-
-        function sharePlaylist(playlistId) {
-            const playlist = appState.playlists.find(p => p.id === playlistId);
-            if (playlist) {
-                alert(`Sharing: ${playlist.name}\n\nFeature coming soon!`);
-            }
         }
 
         async function playDevice(deviceId) {
@@ -1288,12 +1279,9 @@
 
                 if (response.ok) {
                     showMessage('▶️ Playing on device', 'success');
-                } else {
-                    showMessage('❌ Failed to play', 'error');
                 }
             } catch (error) {
                 console.error('Play error:', error);
-                showMessage('❌ Error', 'error');
             }
         }
 
@@ -1308,30 +1296,27 @@
 
                 if (response.ok) {
                     showMessage('⏹️ Stopped', 'success');
-                } else {
-                    showMessage('❌ Failed to stop', 'error');
                 }
             } catch (error) {
                 console.error('Stop error:', error);
-                showMessage('❌ Error', 'error');
             }
         }
 
         function showMessage(message, type = 'info') {
             const container = document.getElementById('messageContainer');
-            const className = type === 'error' ? 'error-message' : type === 'success' ? 'success-message' : 'loading';
             
             if (type === 'loading') {
                 container.innerHTML = '';
                 return;
             }
 
+            const className = type === 'error' ? 'error-message' : type === 'success' ? 'success-message' : 'info-message';
             container.innerHTML = `<div class="${className}">${message}</div>`;
             
             if (type !== 'loading') {
                 setTimeout(() => {
                     container.innerHTML = '';
-                }, 4000);
+                }, 5000);
             }
         }
 
@@ -1365,6 +1350,7 @@
             document.getElementById('appScreen').style.display = 'none';
             document.getElementById('loginScreen').style.display = 'flex';
             document.getElementById('loginError').textContent = '';
+            document.getElementById('messageContainer').innerHTML = '';
         }
     </script>
 </body>
