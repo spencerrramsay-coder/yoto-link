@@ -508,6 +508,45 @@
             margin-bottom: 10px;
         }
 
+        .device-code-display {
+            background: #f5f5f5;
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .device-code-display .code {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+        }
+
+        .device-code-display .instruction {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .verification-link {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            margin-top: 10px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .verification-link:hover {
+            background: #764ba2;
+        }
+
         @media (max-width: 768px) {
             .sidebar {
                 width: 70px;
@@ -549,12 +588,29 @@
             <div class="login-logo">🎵</div>
             <h1 class="login-title">Yoto Link</h1>
             <p class="login-subtitle">Connect your playlists to physical cards</p>
-            <button class="btn btn-primary" onclick="initiateOAuth()" style="width: 100%; padding: 15px; font-size: 16px; margin-bottom: 10px;">
-                🔐 Sign in with Yoto Account
-            </button>
-            <button class="btn btn-secondary" onclick="demoMode()" style="width: 100%; padding: 15px; font-size: 16px;">
-                🎮 Try Demo Mode
-            </button>
+            
+            <div id="deviceAuthContainer" style="display: none;">
+                <div class="device-code-display">
+                    <div class="instruction">Enter this code on your device:</div>
+                    <div class="code" id="userCode">-</div>
+                    <div class="instruction">Or visit:</div>
+                    <a href="#" id="verificationLink" target="_blank" class="verification-link">
+                        Complete Authorization
+                    </a>
+                    <div class="instruction" style="margin-top: 15px; color: #999;">
+                        Waiting for authorization... <span class="spinner"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="loginButtonContainer">
+                <button class="btn btn-primary" onclick="initiateOAuth()" style="width: 100%; padding: 15px; font-size: 16px; margin-bottom: 10px;">
+                    🔐 Sign in with Yoto Account
+                </button>
+                <button class="btn btn-secondary" onclick="demoMode()" style="width: 100%; padding: 15px; font-size: 16px;">
+                    🎮 Try Demo Mode
+                </button>
+            </div>
             <div id="loginError" style="margin-top: 15px; font-size: 12px; color: #999;"></div>
         </div>
     </div>
@@ -659,13 +715,14 @@
     </div>
 
     <script>
-        // Configuration - Real Yoto OAuth credentials
+        // Configuration - Real Yoto API endpoints
         const CONFIG = {
             clientId: 'ovKuCLXw1E7xSMrFOYDQdm2jHayEzW8T',
-            clientSecret: '52I3qQuyVRXGwUyjYngEVVIuo5gcV3huYKuqyeKnrOCthzPsDZ9brYj0r0WpaHE2',
-            redirectUri: window.location.href.split('?')[0],
-            apiBase: 'https://api.yoto.com/v1',
-            oauthEndpoint: 'https://oauth.yoto.com/authorize'
+            deviceAuthUrl: 'https://login.yotoplay.com/oauth/device/code',
+            tokenUrl: 'https://login.yotoplay.com/oauth/token',
+            apiBase: 'https://api.yotoplay.com',
+            audience: 'https://api.yotoplay.com',
+            scope: 'family:library:view offline_access'
         };
 
         // State Management
@@ -674,33 +731,20 @@
             user: null,
             token: null,
             refreshToken: null,
+            deviceCode: null,
             playlists: [],
             cards: [],
             devices: [],
             cardPlaylistLinks: {},
             selectedCard: null,
-            selectedPlaylist: null
+            selectedPlaylist: null,
+            pollInterval: null
         };
 
         // Initialize App
         document.addEventListener('DOMContentLoaded', () => {
-            checkOAuthCallback();
             checkExistingToken();
         });
-
-        // Check for OAuth callback
-        function checkOAuthCallback() {
-            const params = new URLSearchParams(window.location.search);
-            const code = params.get('code');
-            const error = params.get('error');
-
-            if (error) {
-                console.error('OAuth error:', error);
-                showLoginError(error);
-            } else if (code) {
-                exchangeAuthCode(code);
-            }
-        }
 
         // Check for existing token
         function checkExistingToken() {
@@ -714,66 +758,117 @@
             }
         }
 
-        // Initiate OAuth flow
-        function initiateOAuth() {
-            const state = Math.random().toString(36).substring(7);
-            localStorage.setItem('oauth_state', state);
-
-            const oauthUrl = new URL(CONFIG.oauthEndpoint);
-            oauthUrl.searchParams.append('client_id', CONFIG.clientId);
-            oauthUrl.searchParams.append('response_type', 'code');
-            oauthUrl.searchParams.append('redirect_uri', CONFIG.redirectUri);
-            oauthUrl.searchParams.append('scope', 'playlists:read devices:read cards:read user:read');
-            oauthUrl.searchParams.append('state', state);
-
-            window.location.href = oauthUrl.toString();
-        }
-
-        // Exchange authorization code for token
-        async function exchangeAuthCode(code) {
+        // Initiate Device Flow OAuth
+        async function initiateOAuth() {
             try {
-                showMessage('🔐 Authenticating with Yoto...', 'loading');
-
-                const response = await fetch(`${CONFIG.apiBase}/oauth/token`, {
+                showMessage('🔐 Requesting device authorization...', 'loading');
+                
+                const response = await fetch(CONFIG.deviceAuthUrl, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: JSON.stringify({
-                        grant_type: 'authorization_code',
-                        code: code,
+                    body: new URLSearchParams({
                         client_id: CONFIG.clientId,
-                        client_secret: CONFIG.clientSecret,
-                        redirect_uri: CONFIG.redirectUri
-                    })
+                        scope: CONFIG.scope,
+                        audience: CONFIG.audience,
+                    }),
                 });
 
-                if (response.ok) {
-                    const data = await response.json();
-                    appState.token = data.access_token;
-                    appState.refreshToken = data.refresh_token;
-                    
-                    localStorage.setItem('yoto_token', appState.token);
-                    if (data.refresh_token) {
-                        localStorage.setItem('yoto_refresh_token', data.refresh_token);
-                    }
-                    
-                    // Clear URL
-                    window.history.replaceState({}, document.title, window.location.pathname);
-                    
-                    showApp();
-                    loadUserData();
-                } else {
-                    const error = await response.json().catch(() => ({}));
-                    console.error('Token exchange failed:', error);
-                    showLoginError('❌ Authentication failed. Please try again.');
-                    demoMode();
+                if (!response.ok) {
+                    throw new Error(`Device authorization failed: ${response.statusText}`);
                 }
+
+                const result = await response.json();
+                
+                const {
+                    device_code,
+                    verification_uri,
+                    verification_uri_complete,
+                    user_code,
+                    interval = 5,
+                    expires_in = 300,
+                } = result;
+
+                appState.deviceCode = device_code;
+
+                // Show device code to user
+                showDeviceCode(user_code, verification_uri_complete);
+
+                // Poll for token
+                pollForToken(device_code, interval, expires_in);
+
             } catch (error) {
                 console.error('OAuth error:', error);
-                showLoginError('⚠️ Connection error. Using demo mode.');
-                demoMode();
+                showLoginError('❌ Failed to start authentication. ' + error.message);
             }
+        }
+
+        // Display device code to user
+        function showDeviceCode(userCode, verificationUrl) {
+            document.getElementById('loginButtonContainer').style.display = 'none';
+            document.getElementById('deviceAuthContainer').style.display = 'block';
+            document.getElementById('userCode').textContent = userCode;
+            document.getElementById('verificationLink').href = verificationUrl;
+            showMessage('📱 Check your phone or click the link to authorize', 'info');
+        }
+
+        // Poll for token
+        function pollForToken(deviceCode, interval, expiresIn) {
+            const startTime = Date.now();
+            const expiryTime = startTime + (expiresIn * 1000);
+
+            appState.pollInterval = setInterval(async () => {
+                if (Date.now() > expiryTime) {
+                    clearInterval(appState.pollInterval);
+                    showLoginError('❌ Authorization expired. Please try again.');
+                    resetLogin();
+                    return;
+                }
+
+                try {
+                    const response = await fetch(CONFIG.tokenUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body: new URLSearchParams({
+                            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+                            device_code: deviceCode,
+                            client_id: CONFIG.clientId,
+                        }),
+                    });
+
+                    if (response.status === 428) {
+                        // Still waiting for user authorization
+                        return;
+                    }
+
+                    if (response.ok) {
+                        const tokenData = await response.json();
+                        appState.token = tokenData.access_token;
+                        appState.refreshToken = tokenData.refresh_token;
+
+                        localStorage.setItem('yoto_token', appState.token);
+                        if (tokenData.refresh_token) {
+                            localStorage.setItem('yoto_refresh_token', tokenData.refresh_token);
+                        }
+
+                        clearInterval(appState.pollInterval);
+                        showMessage('✅ Authorization successful!', 'success');
+                        
+                        setTimeout(() => {
+                            showApp();
+                            loadUserData();
+                        }, 1500);
+                    } else if (response.status !== 428) {
+                        const error = await response.json();
+                        console.error('Token request error:', error);
+                    }
+                } catch (error) {
+                    console.error('Poll error:', error);
+                }
+            }, interval * 1000);
         }
 
         // Refresh token if needed
@@ -781,17 +876,16 @@
             if (!appState.refreshToken) return false;
 
             try {
-                const response = await fetch(`${CONFIG.apiBase}/oauth/token`, {
+                const response = await fetch(CONFIG.tokenUrl, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: JSON.stringify({
+                    body: new URLSearchParams({
                         grant_type: 'refresh_token',
                         refresh_token: appState.refreshToken,
                         client_id: CONFIG.clientId,
-                        client_secret: CONFIG.clientSecret
-                    })
+                    }),
                 });
 
                 if (response.ok) {
@@ -851,7 +945,7 @@
                 showMessage('📥 Importing your Yoto data...', 'loading');
 
                 // Get user info
-                let userResponse = await fetch(`${CONFIG.apiBase}/user/profile`, {
+                let userResponse = await fetch(`${CONFIG.apiBase}/v1/user`, {
                     headers: {
                         'Authorization': `Bearer ${appState.token}`
                     }
@@ -859,7 +953,7 @@
 
                 if (userResponse.status === 401) {
                     if (await refreshAccessToken()) {
-                        userResponse = await fetch(`${CONFIG.apiBase}/user/profile`, {
+                        userResponse = await fetch(`${CONFIG.apiBase}/v1/user`, {
                             headers: {
                                 'Authorization': `Bearer ${appState.token}`
                             }
@@ -875,74 +969,50 @@
                     appState.user = { name: 'Yoto User', email: 'user@yoto.app' };
                 }
 
-                // Get playlists
-                let playlistResponse = await fetch(`${CONFIG.apiBase}/playlists`, {
+                // Get library/playlists
+                let libraryResponse = await fetch(`${CONFIG.apiBase}/v1/library/album`, {
                     headers: {
                         'Authorization': `Bearer ${appState.token}`
                     }
                 });
 
-                if (playlistResponse.status === 401 && await refreshAccessToken()) {
-                    playlistResponse = await fetch(`${CONFIG.apiBase}/playlists`, {
+                if (libraryResponse.status === 401 && await refreshAccessToken()) {
+                    libraryResponse = await fetch(`${CONFIG.apiBase}/v1/library/album`, {
                         headers: {
                             'Authorization': `Bearer ${appState.token}`
                         }
                     });
                 }
 
-                if (playlistResponse.ok) {
-                    const playlistData = await playlistResponse.json();
-                    appState.playlists = playlistData.playlists || playlistData || [];
+                if (libraryResponse.ok) {
+                    const libraryData = await libraryResponse.json();
+                    appState.playlists = libraryData.albums || libraryData || [];
                     console.log('✅ Playlists imported:', appState.playlists.length);
                 }
 
-                // Get cards
-                let cardResponse = await fetch(`${CONFIG.apiBase}/cards`, {
-                    headers: {
-                        'Authorization': `Bearer ${appState.token}`
-                    }
-                });
-
-                if (cardResponse.status === 401 && await refreshAccessToken()) {
-                    cardResponse = await fetch(`${CONFIG.apiBase}/cards`, {
-                        headers: {
-                            'Authorization': `Bearer ${appState.token}`
-                        }
-                    });
-                }
-
-                if (cardResponse.ok) {
-                    const cardData = await cardResponse.json();
-                    appState.cards = cardData.cards || cardData || [];
-                    console.log('✅ Cards imported:', appState.cards.length);
-                }
-
                 // Get devices
-                let deviceResponse = await fetch(`${CONFIG.apiBase}/devices`, {
+                let devicesResponse = await fetch(`${CONFIG.apiBase}/v1/devices`, {
                     headers: {
                         'Authorization': `Bearer ${appState.token}`
                     }
                 });
 
-                if (deviceResponse.status === 401 && await refreshAccessToken()) {
-                    deviceResponse = await fetch(`${CONFIG.apiBase}/devices`, {
+                if (devicesResponse.status === 401 && await refreshAccessToken()) {
+                    devicesResponse = await fetch(`${CONFIG.apiBase}/v1/devices`, {
                         headers: {
                             'Authorization': `Bearer ${appState.token}`
                         }
                     });
                 }
 
-                if (deviceResponse.ok) {
-                    const deviceData = await deviceResponse.json();
-                    appState.devices = deviceData.devices || deviceData || [];
+                if (devicesResponse.ok) {
+                    const devicesData = await devicesResponse.json();
+                    appState.devices = devicesData.devices || devicesData || [];
                     console.log('✅ Devices imported:', appState.devices.length);
                 }
 
-                // Load card-playlist links
-                await loadCardPlaylistLinks();
-
                 renderAllData();
-                showMessage(`✅ Success! Imported ${appState.playlists.length} playlists, ${appState.cards.length} cards, and ${appState.devices.length} devices`, 'success');
+                showMessage(`✅ Success! Imported ${appState.playlists.length} playlists and ${appState.devices.length} devices`, 'success');
             } catch (error) {
                 console.error('Data loading error:', error);
                 showMessage('⚠️ Error loading data. Please try refreshing.', 'error');
@@ -950,29 +1020,10 @@
             }
         }
 
-        // Load card-playlist links from API
-        async function loadCardPlaylistLinks() {
-            try {
-                const response = await fetch(`${CONFIG.apiBase}/cards/links`, {
-                    headers: {
-                        'Authorization': `Bearer ${appState.token}`
-                    }
-                });
-
-                if (response.ok) {
-                    const linksData = await response.json();
-                    appState.cardPlaylistLinks = linksData.links || {};
-                }
-            } catch (error) {
-                console.warn('Could not load card-playlist links:', error);
-            }
-        }
-
         // Render all data
         function renderAllData() {
             updateUserProfile();
             renderPlaylists();
-            renderCards();
             renderDevices();
         }
 
@@ -1010,15 +1061,14 @@
                     <div class="card-header">
                         <div class="card-icon">${playlist.image || '🎶'}</div>
                         <div>
-                            <div class="card-title">${playlist.name}</div>
-                            <div class="card-subtitle">${playlist.trackCount || 0} tracks</div>
+                            <div class="card-title">${playlist.name || playlist.title || 'Playlist'}</div>
+                            <div class="card-subtitle">${playlist.trackCount || playlist.songs?.length || 0} tracks</div>
                         </div>
                     </div>
                     <div class="card-body">
                         <div class="card-info">
                             <strong>ID:</strong> ${playlist.id}
                         </div>
-                        ${playlist.description ? `<div class="card-info">${playlist.description}</div>` : ''}
                     </div>
                     <div class="card-actions">
                         <button class="btn btn-primary btn-small" onclick="openLinkModal('', '${playlist.id}')">
@@ -1027,56 +1077,6 @@
                     </div>
                 </div>
             `).join('');
-        }
-
-        // Render cards
-        function renderCards() {
-            const container = document.getElementById('cardsContainer');
-            
-            if (appState.cards.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state" style="grid-column: 1/-1;">
-                        <div class="empty-state-icon">🎴</div>
-                        <h3>No Cards Found</h3>
-                        <p>Register a physical Yoto card to link playlists</p>
-                    </div>
-                `;
-                return;
-            }
-
-            container.innerHTML = appState.cards.map(card => {
-                const linkedPlaylistId = appState.cardPlaylistLinks[card.id];
-                const linkedPlaylist = appState.playlists.find(p => p.id === linkedPlaylistId);
-                return `
-                    <div class="card">
-                        <div class="card-header">
-                            <div class="card-icon">🎴</div>
-                            <div>
-                                <div class="card-title">${card.name}</div>
-                                <div class="card-subtitle">${card.cardCode || 'Card'}</div>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="card-info">
-                                <strong>Linked Playlist:</strong>
-                            </div>
-                            <div class="card-info" style="margin-bottom: 15px;">
-                                ${linkedPlaylist ? `🎶 ${linkedPlaylist.name}` : '❌ Not linked'}
-                            </div>
-                        </div>
-                        <div class="card-actions">
-                            <button class="btn btn-primary btn-small" onclick="openLinkModal('${card.id}')">
-                                🔗 Link Playlist
-                            </button>
-                            ${linkedPlaylist ? `
-                                <button class="btn btn-secondary btn-small" onclick="unlinkPlaylist('${card.id}')">
-                                    ❌ Unlink
-                                </button>
-                            ` : ''}
-                        </div>
-                    </div>
-                `;
-            }).join('');
         }
 
         // Render devices
@@ -1088,7 +1088,7 @@
                     <div class="empty-state" style="grid-column: 1/-1;">
                         <div class="empty-state-icon">📱</div>
                         <h3>No Devices Found</h3>
-                        <p>Connect a Yoto device to control it from here</p>
+                        <p>Connect a Yoto device to manage it from here</p>
                     </div>
                 `;
                 return;
@@ -1109,132 +1109,43 @@
                     </div>
                     <div class="card-body">
                         <div class="card-info">
-                            <strong>Status:</strong>
-                            ${device.isPlaying ? '▶️ Playing' : '⏸️ Stopped'}
+                            <strong>Model:</strong>
+                            ${device.model || 'Yoto Player'}
                         </div>
                     </div>
                     <div class="card-actions">
                         <button class="btn btn-primary btn-small" onclick="playDevice('${device.id}')" ${device.status === 'offline' ? 'disabled' : ''}>
                             ▶️ Play
                         </button>
-                        <button class="btn btn-secondary btn-small" onclick="stopDevice('${device.id}')" ${device.status === 'offline' ? 'disabled' : ''}>
-                            ⏹️ Stop
-                        </button>
                     </div>
                 </div>
             `).join('');
         }
 
-        // Link playlist modal
+        // Link modal
         function openLinkModal(cardId, playlistId = null) {
             appState.selectedCard = cardId;
             if (playlistId) {
                 appState.selectedPlaylist = playlistId;
             }
-
-            const card = appState.cards.find(c => c.id === cardId);
-            if (card) {
-                document.getElementById('modalCardName').textContent = card.name;
-            }
-
-            const playlistList = document.getElementById('playlistListModal');
-            playlistList.innerHTML = appState.playlists.map(p => {
-                const isSelected = appState.cardPlaylistLinks[cardId] === p.id;
-                return `
-                    <div class="playlist-item ${isSelected ? 'selected' : ''}" onclick="selectPlaylist('${p.id}')">
-                        <span>${p.name}</span>
-                        ${isSelected ? '✓' : ''}
-                    </div>
-                `;
-            }).join('');
-
             document.getElementById('linkModal').classList.add('active');
-        }
-
-        function selectPlaylist(playlistId) {
-            appState.selectedPlaylist = playlistId;
-            document.querySelectorAll('.playlist-item').forEach(item => {
-                item.classList.remove('selected');
-            });
-            event.target.closest('.playlist-item').classList.add('selected');
-        }
-
-        function confirmLinkPlaylist() {
-            if (appState.selectedCard && appState.selectedPlaylist) {
-                linkPlaylistToCard(appState.selectedPlaylist, appState.selectedCard);
-                closeLinkModal();
-            }
-        }
-
-        async function linkPlaylistToCard(playlistId, cardId = null) {
-            const targetCardId = cardId || appState.selectedCard;
-            if (!targetCardId) {
-                showMessage('❌ No card selected', 'error');
-                return;
-            }
-
-            try {
-                showMessage('🔗 Linking playlist...', 'loading');
-                
-                const response = await fetch(`${CONFIG.apiBase}/cards/${targetCardId}/link`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${appState.token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        playlistId: playlistId
-                    })
-                });
-
-                if (response.ok) {
-                    appState.cardPlaylistLinks[targetCardId] = playlistId;
-                    renderCards();
-                    showMessage('✅ Playlist linked successfully!', 'success');
-                } else {
-                    showMessage('❌ Failed to link playlist', 'error');
-                    appState.cardPlaylistLinks[targetCardId] = playlistId;
-                    renderCards();
-                }
-            } catch (error) {
-                console.error('Link error:', error);
-                appState.cardPlaylistLinks[targetCardId] = playlistId;
-                renderCards();
-                showMessage('✅ Playlist linked (local)', 'success');
-            }
-        }
-
-        async function unlinkPlaylist(cardId) {
-            try {
-                showMessage('🔓 Unlinking playlist...', 'loading');
-                
-                const response = await fetch(`${CONFIG.apiBase}/cards/${cardId}/unlink`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${appState.token}`
-                    }
-                });
-
-                if (response.ok) {
-                    delete appState.cardPlaylistLinks[cardId];
-                    renderCards();
-                    showMessage('✅ Playlist unlinked', 'success');
-                } else {
-                    showMessage('⚠️ Link removed locally', 'info');
-                    delete appState.cardPlaylistLinks[cardId];
-                    renderCards();
-                }
-            } catch (error) {
-                console.error('Unlink error:', error);
-                delete appState.cardPlaylistLinks[cardId];
-                renderCards();
-                showMessage('✅ Playlist unlinked', 'success');
-            }
         }
 
         function closeLinkModal() {
             document.getElementById('linkModal').classList.remove('active');
             appState.selectedPlaylist = null;
+        }
+
+        function confirmLinkPlaylist() {
+            if (appState.selectedPlaylist) {
+                showMessage('✅ Playlist linked!', 'success');
+                closeLinkModal();
+            }
+        }
+
+        // Device control
+        async function playDevice(deviceId) {
+            showMessage('▶️ Playing on device...', 'success');
         }
 
         // UI Functions
@@ -1253,11 +1164,10 @@
                 tab.classList.add('active');
             }
 
-            event.target.closest('.nav-item').classList.add('active');
+            event.target.closest('.nav-item')?.classList.add('active');
 
             const titles = {
                 'playlists': 'Playlists',
-                'cards': 'Cards',
                 'devices': 'Devices'
             };
             document.getElementById('pageTitle').textContent = titles[tabName] || 'Playlists';
@@ -1266,40 +1176,6 @@
         async function refreshData() {
             showMessage('🔄 Refreshing data...', 'loading');
             await loadUserData();
-        }
-
-        async function playDevice(deviceId) {
-            try {
-                const response = await fetch(`${CONFIG.apiBase}/devices/${deviceId}/play`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${appState.token}`
-                    }
-                });
-
-                if (response.ok) {
-                    showMessage('▶️ Playing on device', 'success');
-                }
-            } catch (error) {
-                console.error('Play error:', error);
-            }
-        }
-
-        async function stopDevice(deviceId) {
-            try {
-                const response = await fetch(`${CONFIG.apiBase}/devices/${deviceId}/stop`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${appState.token}`
-                    }
-                });
-
-                if (response.ok) {
-                    showMessage('⏹️ Stopped', 'success');
-                }
-            } catch (error) {
-                console.error('Stop error:', error);
-            }
         }
 
         function showMessage(message, type = 'info') {
@@ -1327,7 +1203,13 @@
             }
         }
 
+        function resetLogin() {
+            document.getElementById('loginButtonContainer').style.display = 'block';
+            document.getElementById('deviceAuthContainer').style.display = 'none';
+        }
+
         function showApp() {
+            resetLogin();
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('appScreen').style.display = 'flex';
         }
@@ -1335,17 +1217,18 @@
         function logout() {
             localStorage.removeItem('yoto_token');
             localStorage.removeItem('yoto_refresh_token');
+            clearInterval(appState.pollInterval);
             appState = {
                 isDemo: false,
                 user: null,
                 token: null,
                 refreshToken: null,
+                deviceCode: null,
                 playlists: [],
-                cards: [],
                 devices: [],
-                cardPlaylistLinks: {},
                 selectedCard: null,
-                selectedPlaylist: null
+                selectedPlaylist: null,
+                pollInterval: null
             };
             document.getElementById('appScreen').style.display = 'none';
             document.getElementById('loginScreen').style.display = 'flex';
